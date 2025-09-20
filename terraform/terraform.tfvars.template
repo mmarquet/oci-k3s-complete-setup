@@ -1,0 +1,14 @@
+# Template for Terraform variables
+# Copy this file to terraform.tfvars and replace with your actual values
+
+# OCI Configuration
+region = "your-region-here"  # e.g., "us-ashburn-1", "eu-marseille-1"
+
+# OCI Tenancy OCID (find in OCI Console -> User menu -> Tenancy)
+tenancy_ocid = "ocid1.tenancy.oc1..your-tenancy-ocid-here"
+
+# Compartment OCID where resources will be created (can be same as tenancy for root compartment)
+compartment_id = "ocid1.tenancy.oc1..your-compartment-ocid-here"
+
+# Display name for your VM instance
+instance_name = "k3s-host"

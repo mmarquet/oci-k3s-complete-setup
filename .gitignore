@@ -1,0 +1,42 @@
+# Environment files (contain sensitive data)
+.env
+k3s/.env
+
+# Terraform files (contain state and credentials)
+terraform.tfvars
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+
+# SSH keys (sensitive) - Note: keys are now in ~/.ssh/
+*.pem
+*.key
+*_rsa
+*_ed25519
+
+# Kubernetes config (may contain sensitive data)
+kubeconfig
+.kube/
+
+# Logs (may contain sensitive information)
+logs/
+*.log
+
+# Archives and backups
+archives/
+*.backup
+*.bak
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+.vscode/
+.idea/
+
+# OS specific
+Thumbs.db
+*.swp
+*.swo
+*~
