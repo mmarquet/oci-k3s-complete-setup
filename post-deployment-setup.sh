@@ -58,6 +58,14 @@ echo "Applying additional SSH security..."
 sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 sudo systemctl restart ssh
 
+# Configure OS-level firewall for HTTP/HTTPS
+echo "Configuring firewall rules for HTTP/HTTPS traffic..."
+sudo apt install -y iptables-persistent netfilter-persistent
+sudo iptables -I INPUT 6 -p tcp --dport 443 -j ACCEPT
+sudo iptables -I INPUT 6 -p tcp --dport 80 -j ACCEPT
+sudo netfilter-persistent save
+echo "Firewall rules configured and saved"
+
 # Install Helm
 echo "Installing Helm..."
 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
