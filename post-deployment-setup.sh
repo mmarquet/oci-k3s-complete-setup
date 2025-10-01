@@ -26,6 +26,13 @@ if [ -z "$DYNU_API_KEY" ] || [ -z "$LETSENCRYPT_EMAIL" ] || [ -z "$DOMAIN_NAME" 
     exit 1
 fi
 
+# Export variables for envsubst
+export DYNU_API_KEY
+export LETSENCRYPT_EMAIL
+export DOMAIN_NAME
+export WILDCARD_DOMAIN
+export ARGOCD_SUBDOMAIN
+
 echo "Starting post-deployment configuration..."
 
 # Update system
@@ -49,14 +56,11 @@ sudo apt install -y \
 # Additional SSH hardening
 echo "Applying additional SSH security..."
 sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-sudo systemctl restart sshd
+sudo systemctl restart ssh
 
 # Install Helm
 echo "Installing Helm..."
-curl https://baltocdn.com/helm/signing.asc | gpg --dearmor | sudo tee /usr/share/keyrings/helm.gpg > /dev/null
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list
-sudo apt update
-sudo apt install -y helm
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 # Install k3s master node
 echo "Installing k3s master node..."
@@ -64,7 +68,14 @@ curl -sfL https://get.k3s.io | sh -s - --disable=servicelb --disable=traefik --s
 
 # Wait for k3s to be ready
 echo "Waiting for k3s to be ready..."
-sudo k3s kubectl wait --for=condition=Ready nodes --all --timeout=300s
+for i in {1..60}; do
+    if sudo k3s kubectl get nodes 2>/dev/null | grep -q Ready; then
+        echo "K3s is ready!"
+        break
+    fi
+    echo "Waiting for k3s... (attempt $i/60)"
+    sleep 5
+done
 
 # Set up kubectl for regular user
 echo "Setting up kubectl access..."
@@ -73,9 +84,12 @@ sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown $(id -u):$(id -g) ~/.kube/config
 chmod 600 ~/.kube/config
 
-# Verify kubectl is working
+# Update kubeconfig to use localhost
+sed -i 's/127.0.0.1/127.0.0.1/' ~/.kube/config
+
+# Verify kubectl is working (using sudo k3s kubectl since kubectl might not be in PATH)
 echo "Verifying kubectl access..."
-kubectl get nodes
+sudo k3s kubectl get nodes
 
 # Install nginx ingress controller
 echo "Installing nginx ingress controller..."
@@ -90,7 +104,7 @@ helm upgrade ingress-nginx ingress-nginx \
 
 # Wait for nginx to be ready
 echo "Waiting for nginx ingress to be ready..."
-kubectl wait --namespace ingress-nginx \
+sudo k3s kubectl wait --namespace ingress-nginx \
     --for=condition=ready pod \
     --selector=app.kubernetes.io/component=controller \
     --timeout=300s
@@ -109,14 +123,19 @@ helm upgrade ${name} ${chart} \
 
 # Wait for cert-manager to be ready
 echo "Waiting for cert-manager to be ready..."
-kubectl wait --namespace cert-manager \
+sudo k3s kubectl wait --namespace cert-manager \
     --for=condition=ready pod \
     --selector=app.kubernetes.io/name=cert-manager \
     --timeout=300s
 
 # Create dynu token secret
 echo "Creating dynu token secret..."
-kubectl create secret generic dynu-token -n cert-manager --from-literal=api-key="$DYNU_API_KEY"
+if ! sudo k3s kubectl get secret dynu-token -n cert-manager >/dev/null 2>&1; then
+    sudo k3s kubectl create secret generic dynu-token -n cert-manager --from-literal=api-key="$DYNU_API_KEY"
+    echo "Dynu token secret created"
+else
+    echo "Dynu token secret already exists, skipping"
+fi
 
 # Install dynu webhook
 echo "Installing dynu webhook..."
@@ -132,9 +151,9 @@ helm upgrade ${name} ${chart} \
 
 # Wait for dynu webhook to be ready
 echo "Waiting for dynu webhook to be ready..."
-kubectl wait --namespace cert-manager \
+sudo k3s kubectl wait --namespace cert-manager \
     --for=condition=ready pod \
-    --selector=app.kubernetes.io/name=dynu-webhook \
+    --selector=app=dynu-webhook \
     --timeout=300s
 
 # Generate cert-manager configuration from template
@@ -143,16 +162,16 @@ envsubst < k3s/cert-manager.yaml.template > k3s/cert-manager.yaml
 
 # Apply cert-manager configuration
 echo "Applying cert-manager configuration..."
-kubectl apply -f k3s/cert-manager.yaml
+sudo k3s kubectl apply -f k3s/cert-manager.yaml
 
 # Install ArgoCD
 echo "Installing ArgoCD..."
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+sudo k3s kubectl create namespace argocd --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+sudo k3s kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 # Wait for ArgoCD to be ready
 echo "Waiting for ArgoCD to be ready..."
-kubectl wait --namespace argocd \
+sudo k3s kubectl wait --namespace argocd \
     --for=condition=ready pod \
     --selector=app.kubernetes.io/name=argocd-server \
     --timeout=600s
@@ -163,11 +182,11 @@ envsubst < k3s/argocd-ingress.yaml.template > k3s/argocd-ingress.yaml
 
 # Apply ArgoCD ingress
 echo "Applying ArgoCD ingress..."
-kubectl apply -f k3s/argocd-ingress.yaml
+sudo k3s kubectl apply -f k3s/argocd-ingress.yaml
 
 # Get ArgoCD admin password
 echo "Getting ArgoCD admin password..."
-ARGOCD_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+ARGOCD_PASSWORD=$(sudo k3s kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
 
 # Log completion
 echo "Post-deployment setup completed at $(date)" | sudo tee -a /var/log/post-deployment.log

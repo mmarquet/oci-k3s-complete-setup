@@ -1,7 +1,8 @@
-# ⚠️ **WARNING**
-This repo is a **WORK IN PROGRESS**. I'm currently trying to get my own VM to test the second part of the script built from manual commands I used when I setup my first server before I lost my machines. 
+# ⚠️ **DISCLAIMER**
 
 **YOU ARE RESPONSIBLE FROM CLONING THIS REPO AND USING IT. I CANNOT BE HELD RESPONSIBLE if you are not on a free plan at Oracle Cloud and you start spending money through the terraform operations.**
+
+This repository provides a complete, tested deployment solution for OCI K3s clusters. The deployment is fully automated, modular, and idempotent.
 
 # OCI k3s Single-Node Cluster Deployment
 
@@ -98,27 +99,51 @@ Start the fully automated deployment:
 ```
 
 This script will:
-- Generate SSH keys automatically (ed25519, stored in `keys/`)
+- Generate SSH keys automatically (ed25519, stored in `~/.ssh/`)
 - Create complete networking infrastructure (VCN, subnet, security lists, gateway)
-- Try to provision VM every 2 minutes for up to 24 hours (feel free to change this but don't be too agressive)
+- Try to provision VM every 2 minutes for up to 24 hours (configurable with `--max-attempts`)
 - Start with minimal resources (1 CPU, 6GB RAM) for better success rate
-- Handle capacity errors automatically
+- Handle capacity errors automatically and retry
 - Resize to 4 CPU, 24GB RAM (maximum free tier)
+- Configure OS-level firewall rules for HTTP/HTTPS
 - Copy files and install K3s cluster
-- Set up complete Kubernetes environment (nginx, argocd, cert-manager)
-- Create SSH alias on your machine for easy server access later (`ssh OCI-k3s`)
-- Log all attempts to `logs/deployment.log`
+- Set up complete Kubernetes environment (nginx ingress, cert-manager, dynu webhook, ArgoCD)
+- Create SSH alias on your machine for easy server access (`ssh OCI-k3s`)
+- Log all operations to `logs/deployment.log`
 
-The VM provisioning can take a VERY long time depending of Oracle current capacities. Be patient.
+**The script is fully idempotent** - you can run it multiple times safely. It will detect existing resources and skip completed steps.
+
+The VM provisioning can take a VERY long time depending on Oracle's current capacity. Be patient.
+
+### Step 3: Update DNS Records
+
+After deployment completes, update your Dynu DNS records to point to the instance's public IP:
+1. Go to [Dynu Control Panel](https://www.dynu.com/en-US/ControlPanel/DDNS)
+2. Update the A record for your domain to the IP shown in deployment output
+3. Update the wildcard record `*.yourdomain.com` to the same IP
+
+DNS propagation typically takes 5-15 minutes with Dynu.
 
 ### What You Get
 
-After the script completes successfully:
-- **Full K3s cluster** running on maximum free tier resources
+After the script completes and DNS propagates:
+- **Full K3s cluster** running on maximum free tier resources (4 OCPU / 24GB RAM)
 - **ArgoCD UI** at `https://argocd.<yourdynudomain>.com`
 - **Easy SSH access** via `ssh OCI-k3s` alias
 - **Secure authentication** using generated ed25519 keys
-- **Production-ready setup** with ingress, SSL, and GitOps
+- **Production-ready setup** with ingress, automatic SSL certificates, and GitOps
+- **Let's Encrypt wildcard certificate** (may take 5-10 minutes to issue)
+
+### Getting ArgoCD Password
+
+Once deployment completes, get your ArgoCD admin password:
+```bash
+ssh OCI-k3s "sudo k3s kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+```
+
+Login to ArgoCD with:
+- **Username**: `admin`
+- **Password**: (from command above)
 
 ## 🔧 Configuration Details
 
@@ -157,6 +182,33 @@ ARGOCD_SUBDOMAIN=argocd.yourdomain.com
 - Automatic SSL certificates via Let's Encrypt
 - Network policies and security hardening
 
+## 🎨 Modular Usage
+
+The deployment system is modular. You can run specific steps:
+
+```bash
+# Run all steps (default)
+./deploy-retry.sh
+
+# Run only specific steps
+./deploy-retry.sh --k3s              # K3s setup only
+./deploy-retry.sh --resize           # Resize VM only
+./deploy-retry.sh --deploy-resize    # Deploy and resize
+./deploy-retry.sh --ssh-alias        # Create SSH alias only
+
+# Set maximum deployment attempts
+./deploy-retry.sh --max-attempts 100
+
+# View help
+./deploy-retry.sh --help
+```
+
+Individual modules are available in `scripts/`:
+- `scripts/1-deploy-vm.sh` - VM deployment
+- `scripts/2-resize-vm.sh` - VM resizing
+- `scripts/3-setup-k3s.sh` - K3s installation
+- `scripts/4-create-ssh-alias.sh` - SSH alias creation
+
 ## 🔍 Monitoring and Access
 
 **During deployment**, monitor progress:
@@ -172,8 +224,9 @@ tail -f logs/deployment.log
 **Check cluster status:**
 ```bash
 ssh OCI-k3s
-kubectl get nodes
-kubectl get pods -A
+sudo k3s kubectl get nodes
+sudo k3s kubectl get pods -A
+sudo k3s kubectl get certificates -A  # Check SSL certificates
 ```
 
 ## 🧹 Cleanup
